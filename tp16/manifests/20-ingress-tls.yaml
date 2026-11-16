@@ -1,0 +1,27 @@
+# TP16 partie 2 : Ingress HTTPS. L'annotation demande à cert-manager de créer le certificat.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: whoami
+  namespace: tp16
+  annotations:
+    cert-manager.io/cluster-issuer: lab-ca-issuer
+    # COMPLÉTÉ : la route n'est publiée que sur l'entrypoint HTTPS de Traefik (443).
+    # En HTTP (80), il n'y a plus de route : Traefik répond 404, donc rien ne passe en clair.
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+spec:
+  ingressClassName: traefik
+  # COMPLÉTÉ : cert-manager (ingress-shim) crée le Certificate whoami-tls pour ce nom (SAN).
+  tls:
+    - hosts: [whoami.lab.local]
+      secretName: whoami-tls
+  rules:
+    - host: whoami.lab.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: whoami # remplacé par oauth2-proxy en partie 5 (voir 41-ingress-oauth2-proxy.yaml)
+                port: { name: http }
