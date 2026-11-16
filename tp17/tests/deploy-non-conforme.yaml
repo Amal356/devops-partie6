@@ -1,0 +1,20 @@
+# Test partie 5 : Deployment non conforme, doit être REFUSÉ par les policies Kyverno en Enforce.
+# Testé dans le namespace tp17-kyverno (sans PSS) pour que ce soit bien Kyverno qui refuse.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bad-app
+  namespace: tp17-kyverno
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: bad-app }
+  template:
+    metadata:
+      labels: { app: bad-app }
+    spec:
+      containers:
+        - name: app
+          image: nginx:latest
+          securityContext:
+            privileged: true

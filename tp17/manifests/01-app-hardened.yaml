@@ -1,0 +1,69 @@
+# TP17 partie 2 : Deployments durcis (conformes au profil PSS "restricted" et aux policies Kyverno).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: tp17
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: api }
+  template:
+    metadata:
+      labels: { app: api, tier: backend }
+    spec:
+      serviceAccountName: api-sa            # partie 1 : identité dédiée (droits minimaux)
+      automountServiceAccountToken: false   # aucun jeton monté : l'API ne parle pas au cluster
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: api
+          image: traefik/whoami:v1.10.0     # tag explicite et immuable (plus de latest)
+          args: ["--port", "8080"]
+          ports: [{ name: http, containerPort: 8080 }]
+          securityContext:                  # plus de privileged
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 20m, memory: 16Mi }
+            limits:   { cpu: 100m, memory: 32Mi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: tp17
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: frontend }
+  template:
+    metadata:
+      labels: { app: frontend, tier: frontend }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101                      # utilisateur nginx de l'image unprivileged
+        runAsGroup: 101
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: frontend
+          image: nginxinc/nginx-unprivileged:1.29   # écoute sur 8080, sans root
+          ports: [{ name: http, containerPort: 8080 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 20m, memory: 32Mi }
+            limits:   { cpu: 200m, memory: 64Mi }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp } # nginx écrit son PID et ses fichiers temporaires dans /tmp
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 16Mi }

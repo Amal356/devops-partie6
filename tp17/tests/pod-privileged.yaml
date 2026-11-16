@@ -1,0 +1,13 @@
+# Test partie 3 : Pod privilégié, doit être REFUSÉ par le profil PSS restricted (enforce).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: evil-privileged
+  namespace: tp17
+spec:
+  containers:
+    - name: shell
+      image: busybox:1.37
+      command: ["sleep", "3600"]
+      securityContext:
+        privileged: true

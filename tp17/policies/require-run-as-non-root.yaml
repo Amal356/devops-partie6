@@ -1,0 +1,37 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-run-as-non-root
+  annotations:
+    policies.kyverno.io/title: Exiger runAsNonRoot
+    policies.kyverno.io/description: >-
+      Les conteneurs ne doivent pas s'exécuter en root : runAsNonRoot: true au niveau
+      du Pod (et non contredit par un conteneur), ou sur chaque conteneur.
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: run-as-non-root
+      match:
+        any:
+          - resources:
+              kinds: ["Pod"]
+      exclude:
+        any:
+          - resources:
+              namespaces: ["kube-system", "kyverno", "falco", "trivy-system", "cert-manager"]
+      validate:
+        message: "runAsNonRoot: true est obligatoire (au niveau du Pod ou de chaque conteneur)."
+        anyPattern:
+          # cas 1 : défini au niveau du Pod, et aucun conteneur ne le remet à false
+          - spec:
+              securityContext:
+                runAsNonRoot: true
+              containers:
+                - =(securityContext):
+                    =(runAsNonRoot): true
+          # cas 2 : défini sur chaque conteneur
+          - spec:
+              containers:
+                - securityContext:
+                    runAsNonRoot: true

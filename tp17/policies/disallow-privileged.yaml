@@ -1,0 +1,33 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-privileged
+  annotations:
+    policies.kyverno.io/title: Interdire les conteneurs privilégiés
+    policies.kyverno.io/description: >-
+      Un conteneur privilégié a accès à tous les périphériques de l'hôte et peut
+      s'en échapper. securityContext.privileged doit être absent ou false.
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: privileged-false
+      match:
+        any:
+          - resources:
+              kinds: ["Pod"]
+      exclude:
+        any:
+          - resources:
+              namespaces: ["kube-system", "kyverno", "falco", "trivy-system", "cert-manager"]
+      validate:
+        message: "Les conteneurs privilégiés sont interdits (securityContext.privileged doit être absent ou false)."
+        pattern:
+          spec:
+            # ancre =( ) : "si le champ existe, alors il doit valoir..."
+            =(initContainers):
+              - =(securityContext):
+                  =(privileged): "false"
+            containers:
+              - =(securityContext):
+                  =(privileged): "false"

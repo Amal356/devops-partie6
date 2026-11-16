@@ -1,0 +1,33 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-requests-limits
+  annotations:
+    policies.kyverno.io/title: Exiger requests et limits
+    policies.kyverno.io/description: >-
+      Sans requests, l'ordonnanceur place les Pods à l'aveugle ; sans limite mémoire,
+      un conteneur peut épuiser le nœud (déni de service).
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: requests-and-memory-limit
+      match:
+        any:
+          - resources:
+              kinds: ["Pod"]
+      exclude:
+        any:
+          - resources:
+              namespaces: ["kube-system", "kyverno", "falco", "trivy-system", "cert-manager"]
+      validate:
+        message: "resources.requests.cpu, resources.requests.memory et resources.limits.memory sont obligatoires."
+        pattern:
+          spec:
+            containers:
+              - resources:
+                  requests:
+                    cpu: "?*"     # "?*" = au moins un caractère (champ présent et non vide)
+                    memory: "?*"
+                  limits:
+                    memory: "?*"

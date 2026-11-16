@@ -1,0 +1,25 @@
+# Plan B partie 4 : si l'image nginx-unprivileged n'a ni wget ni curl, ce Pod busybox
+# porte le label tier=frontend (mêmes droits réseau que le frontend) et respecte le profil restricted.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: frontend-client
+  namespace: tp17
+  labels: { tier: frontend }
+spec:
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    seccompProfile: { type: RuntimeDefault }
+  containers:
+    - name: shell
+      image: busybox:1.37
+      command: ["sleep", "infinity"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: { drop: ["ALL"] }
+      resources:
+        requests: { cpu: 10m, memory: 8Mi }
+        limits:   { cpu: 50m, memory: 16Mi }
