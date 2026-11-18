@@ -10,7 +10,7 @@ Objectif de la partie : chiffrer les échanges, gérer les identités, durcir le
 |---|---|---|---|
 | TP16 | HTTPS avec cert-manager (CA de lab) et IAM avec Keycloak (OIDC, rôles, oauth2-proxy) | [tp16/](tp16/README.md) | ✅ 6/6 captures (+3 complémentaires) |
 | TP17 | Sécurité Kubernetes : RBAC, PSS, NetworkPolicy, Kyverno, Falco | [tp17/](tp17/README.md) | ✅ 7/7 captures |
-| TP18 | Secrets et Vault : Vault, External Secrets, Sealed Secrets, rotation | tp18/ | ⏳ |
+| TP18 | Secrets et Vault : Vault, External Secrets, Sealed Secrets, rotation | [tp18/](tp18/README.md) | 🟡 en cours |
 
 ## Fil rouge sécurité
 - Aucun secret affiché ni commité : clé privée de la CA, secret du client OIDC, mots de passe Keycloak, kubeconfig (voir `.gitignore`).
