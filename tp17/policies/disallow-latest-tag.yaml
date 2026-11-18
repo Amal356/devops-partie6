@@ -9,7 +9,7 @@ metadata:
       Le tag latest est mutable : on ne sait pas quelle version tourne
       et un rollback est impossible. Toute image doit avoir un tag explicite.
 spec:
-  validationFailureAction: Audit # passer à Enforce après avoir observé les rapports
+  validationFailureAction: Enforce # Audit d abord (rapports observés), puis Enforce
   background: true
   rules:
     - name: require-explicit-tag

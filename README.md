@@ -9,7 +9,7 @@ Objectif de la partie : chiffrer les échanges, gérer les identités, durcir le
 | TP | Sujet | Dossier | État |
 |---|---|---|---|
 | TP16 | HTTPS avec cert-manager (CA de lab) et IAM avec Keycloak (OIDC, rôles, oauth2-proxy) | [tp16/](tp16/README.md) | ✅ 6/6 captures (+3 complémentaires) |
-| TP17 | Sécurité Kubernetes : RBAC, PSS, NetworkPolicy, Kyverno, Falco | tp17/ | ⏳ |
+| TP17 | Sécurité Kubernetes : RBAC, PSS, NetworkPolicy, Kyverno, Falco | [tp17/](tp17/README.md) | 🟡 en cours : 5/7 captures (RBAC, PSS, NetworkPolicy, Kyverno CLI et Enforce) |
 | TP18 | Secrets et Vault : Vault, External Secrets, Sealed Secrets, rotation | tp18/ | ⏳ |
 
 ## Fil rouge sécurité

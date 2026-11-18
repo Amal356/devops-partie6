@@ -8,7 +8,7 @@ metadata:
       Sans requests, l'ordonnanceur place les Pods à l'aveugle ; sans limite mémoire,
       un conteneur peut épuiser le nœud (déni de service).
 spec:
-  validationFailureAction: Audit
+  validationFailureAction: Enforce # Audit d abord, puis Enforce
   background: true
   rules:
     - name: requests-and-memory-limit

@@ -8,7 +8,7 @@ metadata:
       Un conteneur privilégié a accès à tous les périphériques de l'hôte et peut
       s'en échapper. securityContext.privileged doit être absent ou false.
 spec:
-  validationFailureAction: Audit
+  validationFailureAction: Enforce # Audit d abord, puis Enforce
   background: true
   rules:
     - name: privileged-false

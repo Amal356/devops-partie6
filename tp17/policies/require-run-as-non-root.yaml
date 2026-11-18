@@ -8,7 +8,7 @@ metadata:
       Les conteneurs ne doivent pas s'exécuter en root : runAsNonRoot: true au niveau
       du Pod (et non contredit par un conteneur), ou sur chaque conteneur.
 spec:
-  validationFailureAction: Audit
+  validationFailureAction: Enforce # Audit d abord, puis Enforce
   background: true
   rules:
     - name: run-as-non-root
