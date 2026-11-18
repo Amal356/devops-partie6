@@ -41,7 +41,6 @@ Fichiers :
 | `tests/deploy-non-conforme.yaml` | Deployment non conforme pour tester Kyverno en Enforce |
 | `tests/frontend-client.yaml` | plan B : client busybox `tier=frontend` conforme au profil restricted |
 
-> ⏳ Les parties ci-dessous sont complétées au fur et à mesure des captures.
 
 ## 2. Partie 1 : RBAC et ServiceAccount
 
@@ -294,7 +293,81 @@ kubectl apply -f tests/deploy-non-conforme.yaml   # nginx:latest + privileged: t
 | Test hors cluster (CI) | ❌ | ✅ Kyverno CLI |
 
 Les deux sont **complémentaires** : PSS est une base sûre, toujours disponible et sans dépendance ; Kyverno ajoute les règles spécifiques à l'organisation.## 7. Partie 6 : Trivy Operator, Kubescape, Falco
-> ⏳
+
+### Trivy Operator (analyse continue dans le cluster)
+
+```bash
+helm install trivy-operator aqua/trivy-operator -n trivy-system --create-namespace \
+  --version 0.38.1 --set targetNamespaces=tp17 --wait --timeout 15m     # Trivy Operator 0.36.1
+kubectl get vulnerabilityreports -n tp17 -o wide
+kubectl get configauditreports  -n tp17 -o wide
+```
+`targetNamespaces=tp17` limite l'analyse au namespace du TP : connexion lente et disque presque plein, il n'était pas utile de scanner toutes les images système.
+
+### Kubescape (référentiel NSA-CISA)
+
+```bash
+curl -s https://raw.githubusercontent.com/kubescape/kubescape/master/install.sh | /bin/bash   # v4.0.21, checksum vérifié
+kubescape scan framework nsa manifests/00-app.yaml               # avant
+mkdir -p apres && cp manifests/01-app-hardened.yaml manifests/10-rbac.yaml manifests/20-networkpolicies.yaml apres/
+kubescape scan framework nsa apres/                              # après
+kubescape scan framework nsa --include-namespaces tp17           # cluster
+```
+
+![trivy-kubescape](captures/trivy-kubescape.png)
+
+**Trivy Operator**
+- **VulnerabilityReport** `traefik/whoami:v1.10.0` : **2 CRITICAL, 8 HIGH**, 11 MEDIUM (et 70 *unknown*, sans score CVSS). Une configuration parfaitement durcie n'empêche pas l'image d'embarquer des **dépendances vulnérables** : il faut aussi mettre l'image à jour (nouvelle version de whoami), et bloquer en CI les images CRITICAL comme au TP10.
+- **ConfigAuditReports** : `pod-intruder` cumule **3 HIGH**, 4 MEDIUM et 10 LOW (root, pas de limites, pas de seccomp…), alors que les ReplicaSets durcis `api` et `frontend` n'ont plus que 1 MEDIUM. Les 4 NetworkPolicies et le Service ont 0 problème.
+- Les rapports sont des **ressources Kubernetes** (CRD) : on peut les interroger avec `kubectl`, les exporter vers Prometheus ou Grafana, et ils sont **mis à jour automatiquement** à chaque nouveau déploiement.
+- Limite : le rapport de vulnérabilités du `frontend` (`nginx-unprivileged`) n'a pas été produit. Ses jobs de scan ont été supprimés pendant une réinstallation de l'opérateur (erreurs `ContainerStatusUnknown` / `Reconciler error` dans les logs), et l'opérateur ne les a pas relancés, même après un `rollout restart` (voir *Difficultés*).
+
+**Kubescape, score NSA-CISA**
+
+| Périmètre | Ressources en échec | Score |
+|---|---|---|
+| **Avant** : `00-app.yaml` | 4 / 4 | **53,33 %** |
+| **Après** : fichiers durcis (`01-app-hardened`, RBAC, NetworkPolicies) | 0 / 8 | **100 %** |
+| Cluster, namespace `tp17` (ressources réelles) | 3 / 27 | **72,88 %** |
+
+- Le durcissement fait passer le score **de 53 % à 100 %** sur les manifests : conteneurs non-root, FS en lecture seule, capacités retirées, limites, NetworkPolicies, ServiceAccount dédié sans jeton.
+- Le score du **cluster** (72,88 %) est plus bas, car il inclut ce qui **tourne réellement** : le Pod `intruder` (volontairement non conforme, créé avant l'`enforce`), le client de test, les anciens ReplicaSets, et des contrôles au niveau du namespace et du cluster. Scanner les fichiers ne suffit pas : il faut aussi scanner l'état réel.
+- Les contrôles C-0069 et C-0070 (configuration du **kubelet**) n'ont pas été évalués : il faut le *host sensor* de Kubescape, déployé sur les nœuds.
+
+### Falco (détection à l'exécution)
+
+```bash
+helm repo add falcosecurity https://falcosecurity.github.io/charts --force-update
+helm install falco falcosecurity/falco -n falco --create-namespace --version 9.2.2 \
+  --set driver.kind=modern_ebpf --set tty=true \
+  --set 'collectors.containerEngine.engines.containerd.sockets[0]=/run/k3s/containerd/containerd.sock' \
+  --wait --timeout 15m                                         # Falco 0.45.2
+# simulation d'attaque : shell interactif, lecture de /etc/shadow, écouteur réseau (porte dérobée)
+kubectl -n tp17 exec -it intruder -- sh -c 'cat /etc/shadow > /dev/null; nc -l -p 4444 & sleep 1'
+kubectl -n falco logs -l app.kubernetes.io/name=falco -c falco --since=5m | grep -E 'Notice|Warning|Critical'
+```
+
+Démarrage (extrait) :
+```text
+Loading rules from: /etc/falco/falco_rules.yaml | schema validation: ok
+Opening 'syscall' source with modern BPF probe.
+```
+
+![falco-alert](captures/falco-alert.png)
+
+| Heure | Priorité | Règle | Détails |
+|---|---|---|---|
+| 17:43:44.194 | **Notice** | *A shell was spawned in a container with an attached terminal* | `kubectl exec -it` → `sh` lancé avec un terminal, `user=root` |
+| 17:43:44.201 | **Warning** | *Sensitive file opened for reading by non-trusted program* | `file=/etc/shadow`, `process=cat`, `parent=sh`, image `docker.io/library/busybox` |
+
+**Analyse**
+- Falco observe les **appels système** (`execve`, `openat`) grâce à la sonde **eBPF moderne**, sans module noyau ni modification des conteneurs. Les deux alertes arrivent **en moins de 10 ms** après l'action.
+- C'est la **dernière ligne de défense** : RBAC, PSS, NetworkPolicy et Kyverno agissent **avant** l'exécution (prévention). Falco **détecte** ce qui se passe **pendant** l'exécution, par exemple un attaquant qui aurait obtenu un shell malgré tout.
+- L'alerte donne le contexte nécessaire à une enquête : processus, parent, ligne de commande complète, utilisateur (root, UID 0), ID et image du conteneur.
+- L'écouteur `nc -l -p 4444` n'a pas déclenché d'alerte avec le jeu de règles par défaut (`falco_rules.yaml`, règles *stable*). La détection des écouteurs réseau suspects se trouve dans les règles *incubating/sandbox*, à activer selon le besoin.
+- En production, les alertes sont envoyées vers **Falcosidekick** (Slack, SIEM, webhook, réponse automatique comme supprimer le Pod) au lieu d'être lues dans les logs.
+
+**Limite** : les métadonnées Kubernetes (`k8s_ns`, `k8s_pod_name`) ne sont pas enrichies. Le plugin *container* cherche le socket par défaut `/host/run/containerd/containerd.sock`, qui n'est pas le CRI de K3s (`container engine unavailable … unknown service runtime.v1.RuntimeService`), et la clé `collectors.containerEngine.engines.containerd.sockets` passée à Helm n'a pas été prise en compte par ce chart. Seul le `container_name` (`shell`) et l'image sont affichés. Correction à faire : monter `/run/k3s/containerd` et pointer le plugin sur `/host/run/k3s/containerd/containerd.sock` via un fichier `values.yaml` (`helm show values falcosecurity/falco`).
 
 ## 8. Difficultés rencontrées
 
@@ -303,13 +376,37 @@ Les deux sont **complémentaires** : PSS est une base sûre, toujours disponible
 | `wget: executable file not found` dans `frontend` | L'image `nginx-unprivileged` est minimale, sans `wget` ni `curl` | Plan B : Pod `frontend-client` (busybox, label `tier=frontend`, conforme au profil `restricted`) |
 | `Connection refused` au lieu du *timeout* attendu | kube-router (NetworkPolicies de K3s) utilise `REJECT` et non `DROP` | Comportement attendu : le flux est bien bloqué |
 | `ClusterPolicy … denied the request: Kyverno v1.20 removed execution of legacy kyverno.io policy types` | Kyverno 1.20 n'exécute plus les `ClusterPolicy` (remplacées par `ValidatingPolicy` en CEL) | Désinstallation, puis chart **3.9.2 (v1.19.2)**, qui les exécute encore. À terme : migrer vers `ValidatingPolicy` |
+| `helm install … --version X.Y.Z` (texte d'exemple copié tel quel), puis un `helm uninstall` alors que l'installation avait réussi | Mauvaise lecture d'une consigne | Jobs de scan orphelins supprimés (`kubectl -n trivy-system delete jobs --all`), puis réinstallation. Le rapport du frontend n'a pas été régénéré |
+| Falco en `CrashLoopBackOff` (14 redémarrages) avant de se stabiliser | `Error: could not initialize inotify handler` : limite `fs.inotify.max_user_instances` atteinte, car beaucoup de composants surveillent des fichiers sur la même VM (K3s, Kyverno, Trivy, Docker, autres projets) | Le pod a fini par démarrer quand des instances ont été libérées. Correction durable : `sudo sysctl -w fs.inotify.max_user_instances=512` (et dans `/etc/sysctl.d/`) |
+| Alertes Falco sans `k8s_pod_name` | Plugin *container* sur le socket containerd standard, alors que K3s utilise `/run/k3s/containerd/containerd.sock` | Détection fonctionnelle. Enrichissement à corriger via `values.yaml` |
 | `kyverno-cli … permission denied` | Conteneur non-root (UID 65532) ; fichiers lisibles seulement par `amal` | `docker run --user "$(id -u):$(id -g)" -v "$PWD:/w:ro"` |
 | `helm install … no cached repo found` | Cache Helm du dépôt kyverno absent | `helm repo add kyverno … --force-update` puis `helm repo update kyverno` |
 | Disque de la VM à 92 % (VM partagée avec d'autres projets) | Images Docker et K3s, cache de build | `apt clean`, `docker builder prune -f` (−1,2 Go), `k3s crictl rmi --prune` ; **les volumes Docker (données d'autres projets) n'ont pas été touchés**. Espace libre : 3,8 Go → 5,6 Go |
 | `nslookup … \| tail -2` n'affiche rien | La sortie de busybox `nslookup` se termine par des lignes vides | `grep -A1 "Name:"` |
 
 ## 9. Sécurité
-> ⏳
+
+**Défense en profondeur mise en place**
+
+| Couche | Outil | Moment | Rôle |
+|---|---|---|---|
+| Identité | RBAC, ServiceAccount dédié, jeton non monté | API | moindre privilège pour l'application |
+| Pod | `securityContext` | exécution | non-root, FS en lecture seule, `drop ALL`, seccomp, limites |
+| Admission | Pod Security Standards (`restricted`) | création | refus natif des Pods dangereux |
+| Admission | Kyverno (Enforce) | création | règles métier : pas de `latest`, pas de privilégié, non-root, limites |
+| CI | Kyverno CLI | avant déploiement | mêmes policies sur les fichiers (*shift left*) |
+| Réseau | NetworkPolicies | exécution | *default deny*, seul frontend → api |
+| Analyse | Trivy Operator, Kubescape | continu | CVE des images, configuration, score NSA |
+| Détection | Falco (eBPF) | exécution | shell interactif, lecture de `/etc/shadow` |
+
+**Bonnes pratiques appliquées pendant le TP**
+- Versions **figées** : Kyverno 3.9.2 / v1.19.2, kyverno-cli `v1.19.2` (et non `:latest`), Trivy Operator 0.38.1, Falco 9.2.2 / 0.45.2. Le binaire Kubescape a été vérifié par checksum à l'installation.
+- Conteneur kyverno-cli lancé **avec mon UID** et dossier monté en **lecture seule** (`:ro`), plutôt que d'ouvrir les droits du dossier.
+- Contenu de `/etc/shadow` envoyé vers `/dev/null` pendant la simulation : rien de sensible n'apparaît sur les captures.
+- Nettoyage du disque **sans toucher aux volumes Docker** (données des autres projets hébergés sur la VM).
+- Namespaces système exclus des policies Kyverno, sinon Falco, qui doit être privilégié, serait bloqué. En contrepartie, ces namespaces doivent être protégés par le RBAC.
+
+**Points restant à traiter** : Pod `intruder` non conforme (créé avant l'`enforce`), CVE CRITICAL de `whoami:v1.10.0` (mettre à jour l'image), bindings `cluster-admin` des jobs Helm de Traefik à auditer, migration des `ClusterPolicy` vers `ValidatingPolicy` (Kyverno 1.20+), Kyverno en haute disponibilité (≥ 2 réplicas, car `failurePolicy: Fail`).
 
 ## 10. Livrables
 
@@ -320,5 +417,5 @@ Les deux sont **complémentaires** : PSS est une base sûre, toujours disponible
 | `captures/netpol.png` | Frontend → API OK, intrus → API bloqué | ✅ |
 | `captures/kyverno-enforce.png` | Deployment non conforme refusé avec le message de la policy | ✅ |
 | `captures/kyverno-cli.png` | Résultat de `kyverno apply` en ligne de commande | ✅ |
-| `captures/trivy-kubescape.png` | Rapports Trivy Operator et score Kubescape avant / après | ⏳ |
-| `captures/falco-alert.png` | Alerte Falco après la lecture de `/etc/shadow` | ⏳ |
+| `captures/trivy-kubescape.png` | Rapports Trivy Operator et score Kubescape avant / après | ✅ |
+| `captures/falco-alert.png` | Alerte Falco après la lecture de `/etc/shadow` | ✅ |
